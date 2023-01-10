@@ -1,0 +1,306 @@
+---
+title: "BaitCap Analysis"
+author: "Jessica Rowell"
+date: "9/8/2021"
+output:
+  html_document: default
+  pdf_document:
+    fig_width: 6
+    fig_height: 3.6
+  fontsize: 12
+  geometry: margin=1in
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(pastecs)
+library(ggpubr)
+library(gridExtra)
+library(knitr)
+```
+
+# Background on the problem
+
+**Objective**: Evaluate how well a laboratory method captures Shiga toxin-producing *E. coli* (STEC) from complex samples that also contain commensal (non-pathogenic) *E. coli* strains.  Pathogenic and commensal *E. coli* are very similar and detecting STEC when it exists in along with commensal *E. coli* is an important problem for outbreak detection and surveillance.
+Bait capture method: My team members would like to evaluate a laboratory method called “bait capture” in comparison to a gold standard (shotgun sequencing). Briefly, bait capture involves first designing “baits” that bind to specific pieces of DNA.   The desired DNA targets are captured, amplified, and then sequenced.  The result is a set of sequences that are enriched for the DNA targets of interest.  
+
+**Shotgun method**: Shotgun sequencing involves chopping up long strands of DNA into small fragments and then sequencing all these fragments.  In a sample with many different species, the small fragment sequences (called “short reads”) get all mixed up and we have to use computational techniques (like binning) to assemble the genomes and determine what species were in the original sample.  Theoretically, this is an unbiased technique because everything gets sequenced equally (no enrichment of certain targets).  
+
+We are comparing the bait capture method against this method to determine how good bait capture is at capturing STEC in samples containing STEC and commensal *E. coli* strains.
+
+**Replicates**: The baitcap vs. shotgun comparison was made in triplicate.  The need for this analysis (i.e. this entire problem statement) stems from how the replicates were made.  Each replicate was sourced from a separate solution containing STEC and commensal *E. coli* in a specified ratio.  For example, if the specified ratio is 1:1, then a lab technician made 3 separate solutions of 1:1.  Because the quantities are very small, there is substantial room for measurement error.  We no longer have a known starting ratio for comparison.  That’s why we need a method that compares baitcap to shotgun per replicate.
+
+This contrasts with the other way this experiment has been done.  That time, 1 main solution was made containing STEC and commensal in the prespecified ratio.  3 separate samples were taken from that solution, and then baitcap and shotgun were run on each of those 3 samples.  In this scenario, the ratio in the samples taken from the main solution should follow the normal distribution (I wouldn’t expect it to be exactly the prespecified ratio every time), with a small variance.  In that case, there isn’t much need for a special approach.  Since it was done differently this time, we must do the analysis differently to take into account that we don’t have a reliable, known ratio for each of our 3 replicates.
+
+# Exploratory analysis 
+
+## Taking a look at the data
+
+```{r new_data_in, include=FALSE}
+data <- read.delim('summary_sheet.txt', header = TRUE)
+# Get data in format for analysis (create Y = total reads STEC/tot reads commensal)
+d2 <- data %>% arrange(type, rep, bc) %>% group_by(type, rep, bc) %>% mutate(y = outcome / lag(outcome)) %>% filter(!is.na(y))
+# Log transform Y
+d2$logY <- log(d2$y)
+# Get our outcome variable (Z = logY(baitcap) - logY(shotgun))
+d3 <- d2 %>% group_by(rep, type) %>% mutate(z = logY - lag(logY)) %>% filter(!is.na(z))
+d4 <- d3[ , c("type","comparison", "rep", "z")]
+# d2 dataset has the "full" data where y = ratio STEC/commensal and x = bc or ss
+# d4 just has rep and z (which is logY(baitcap) - logY(shotgun))
+```
+
+### Data tables
+
+Input data for graphs and models  
+
+type = C2C1, comparison = C2 means this row compares C2 to C1  
+rep = replicate number  
+z = logY(baitcap) - logY(shotgun), where Y = reads baitcap / reads shotgun  
+
+```{r raw1, echo=FALSE, results = 'asis'}
+kable(d4, caption = "Table 1. Input data for graphs and models")
+```
+
+Raw input data that can be used to check the numbers for Y, logY, and z above.  
+
+type = group indicator (C2C1 indicates that's a C1 or C2 comparison row)  
+comparison = this couples with "type"; type = C2C1 means it's a C2 vs. C1, and comparison indicates which row it is  
+bc = indicates baitcap (1) vs. shotgun (0)  
+rep = replicate number  
+outcome = number of reads  
+
+
+```{r raw2, echo=FALSE, results = 'asis'}
+temp <- data %>% arrange(type, rep, bc) %>% group_by(type, rep, bc) %>% mutate(y = outcome / lag(outcome)) %>% mutate(logY = log(y))
+kable(temp, caption = "Table 2. Raw input data")
+```
+
+
+Our outcome variable of interest is the ratio of STEC reads to commensal reads. We want to compare this value for baitcap vs. shotgun sequencing.  We want to account for the effect, if any, of replicate number, given the wet lab methodology.
+
+First we visually check whether our outcome variable is normally distributed in our dataset.
+These look reasonable, especially considering the small number of observations (n = 12).  For the QQ plot, the points should fall within the gray area, preferably as close to the line as possible. For the density plot, we're looking for a nice "normal looking" curve, without much skew or bumps.
+
+```{r qplot, echo=FALSE}
+ggqqplot(d4, x = "z", main = "QQ plot")
+ggdensity(d4, x = "z",  main = "Density plot",  xlab = "Total # of reads")
+
+```
+
+
+We may want to satisfy our curiosity by taking a quick look at how our outcome of interest compares for baitcap vs. shotgun. Here our outcome of interest is the ratio of total number of reads for STEC vs. commensal.  In the plots below, the bold line in the box is the median and the box represents the interquartile range.  So the middle half of the data resides within the box.  The lines extend to cover 99.3% of the data.  Any dots outside the lines are outliers.  Very long boxes indicate a large variance, and low precision. For our small number of observations, a larger variance is not unexpected.
+
+Here we observe that baitcap seems to capture slightly more STEC than commensal, compared to shotgun, but there is a lot of overlap in the two distributions.
+
+```{r new_bc, echo=FALSE}
+ggboxplot(d2, x = "bc", y = "logY", color = "bc", palette = "npg",
+          ylab = "Ratio: # reads STEC/ # reads commensal", 
+          xlab = "Baitcap: 1 vs. Shotgun: 0")
+```
+
+Now we visually check the distribution of that same ratio (# reads STEC vs. # reads commensal) across replicate number.
+While the medians are consistent across replicates, there is more variability in replicates 1 and 3 and the distributions look different.
+
+```{r new_reps, echo=FALSE}
+ggboxplot(d2, x = "rep", y = "logY", 
+          color = "rep", palette = "npg",
+          ylab = "Total # of reads", 
+          xlab = "Replicate number: 1, 2, 3")
+```
+
+## First linear regression analysis: assume 12 independent samples
+
+In this first analysis, we will treat the replicates as biological samples. 
+So, we have 4 different biological sample comparisons: C2 vs. C1, F vs. C1, K vs. C1, N vs. C1.
+For each of those, there are 3 replicates.
+
+Let's call our outcome "z". Z is the **difference** of the ratio of STEC-to-commensal for baitcap vs. shotgun.
+For analysis the ratios are log-transformed (as you see below).
+
+
+$$y = \frac{reads_{STEC}}{reads_{commensal}}$$
+
+$$z = \log (y_{baitcap}) - \log (y_{shotgun})$$
+
+If we first consider each replicate as a separate, independent sample, we can just observe the average of z ($\mu_z$) in our whole dataset.  This is equivalent to saying we did 12 separate tests of baitcap vs. shotgun, and we want to see what's our best estimate of "z".  
+
+The line we are fitting looks like this:
+
+$$Z_i = \beta_0 + \epsilon, \space \space \space i = 1,2,...,12 $$
+Some details to note: the residuals are not randomly distributed. Observations 6 and 10 could be influential.  These two observations correspond to F vs. C1 (replicate 3) and N vs. C1 (replicate 1).
+
+```{r new_mean_z, echo=FALSE}
+l1 <- lm(z ~ 1, d4)
+summary(l1)
+plot(l1$residuals, main = "Residuals", ylab = "residuals", xlab = "observation number")
+plot(cooks.distance(l1), main = "Cook's D", ylab = "Cook's D", xlab = "observation number")
+```
+
+```{r new, echo=FALSE}
+s <- coef(l1)[[1]]
+s1 <- exp(s)
+print(paste0("Inverse ln(intercept): ", s1))
+```
+
+
+Our estimate of $\mu_z$ is 0.89. 
+If we treat all replicates as independent biological samples, then  our estimate is that the ratio of STEC to commensal *E. coli* is 0.88 higher for baitcap than for shotgun.  This is not statistically significant. It also considers all 12 biological samples the same (and I am questioning whether that is correct, especially because I think C2 is also commensal).
+
+
+## Second linear regression analysis: assess the importance of replicate 
+
+Now we will introduce a variable for the effect of replicate on Z.
+The results of the linear regression suggest that replicate number does not significantly predict whether baitcap performs better than shotgun for detecting STEC vs. commensal *E. coli*. 
+
+
+```{r rep_effect, echo=FALSE}
+l2 <- lm(z ~ as.factor(rep), d4)
+summary(l2)
+plot(l2$residuals, main = "Residuals", ylab = "residuals", xlab = "observation number")
+plot(cooks.distance(l2), main = "Cook's D", ylab = "Cook's D", xlab = "observation number")
+```
+
+## Summary of linear regression analyses
+
+In the figure below, we can see the following minor trend: baitcap performs a little better than shotgun for K vs. C1 and F vs. C1, but a little worse for N vs. C1 and C2 vs. C1. I'd say there is also a trend towards an effect of replicate number, and I would probably change the wet lab methodology if it's not costly in time or other resources.  With larger samples, independent replicates might become a problem.  It would be interesting to repeat this analysis with replicates drawn from a single mixture, and compare the results with what we observe here.
+
+
+```{r summary, echo=FALSE}
+d4$rep <- as.factor(d4$rep)
+ggscatter(d4, x = "rep", y = "z",
+          conf.int = TRUE,
+          color = "rep", palette = "npg",
+          label = "comparison", repel = TRUE,
+          xlab = "Replicate number",
+          ylab = "STEC/commensal for baitcap - STEC/commensal for shotgun"
+          )
+
+```
+
+# Analysis of pilot baitcap study data
+
+
+
+```{r type_analysis, include=FALSE}
+l3 <- lm(z ~ as.factor(type), d4)
+summary(l3)
+plot(l3$residuals, main = "Residuals", ylab = "residuals", xlab = "observation number")
+plot(cooks.distance(l3), main = "Cook's D", ylab = "Cook's D", xlab = "observation number")
+# Effect on y of 1 unit change in x (for each comparison)
+exp(coef(l3))
+
+```
+
+```{r lm_eval2, include=FALSE}
+par(mfrow=c(2,2))
+plot(l3)
+par(mfrow=c(1,1))
+```
+
+
+
+The figure below shows a comparison among different types: C2 vs. C1, F vs. C1, K vs. C1, and N vs. C1.  Here our outcome of interest is the ratio of total number of reads for one type (C2, F, K, or N) vs. commensal (C1).  In the plots below, the bold line in the box is the median and the box represents the interquartile range.  So the middle half of the data resides within the box.  The lines extend to cover 99.3% of the data.  Any dots outside the lines are outliers.  Very long boxes indicate a large variance, and low precision. For our small number of observations, a larger variance is not unexpected.
+
+Here we observe that baitcap seems to capture more of its target STEC (F and K types) than commensal, compared to shotgun, but only when used on STEC for which the baits have been designed.  The nonspecific target STEC, N, performed the same as the control group (C2 vs. C1).
+
+
+```{r type_graph1, echo=FALSE}
+
+dg <- d4
+dg$type[dg$type == "FC1"] <- "F vs. C1"
+dg$type[dg$type == "KC1"] <- "K vs. C1"
+dg$type[dg$type == "NC1"] <- "N vs. C1"
+dg$type[dg$type == "C2C1"] <- "Commensal control"
+
+ggboxplot(dg, x = "type", y = "z", 
+          color = "type", palette = "npg",
+          ylab = "Log(total # reads) for STEC vs. commensal", 
+          xlab = "Comparison Type")
+```
+
+log(STEC/commensal) - BC
+log(STEC/commensal) - SS
+
+outcome: log[(STEC/commensal)-BC / (STEC/commensal)-SS]
+**same as: log(STEC/commensal-BC) - log(STEC/commensal-SS) **
+
+
+
+
+
+## Comparing target STEC vs. controls
+
+Now I have collapsed the target STEC types (F and K) together and removed the non-target STEC group (N) to compare baitcap vs. shotgun performance in target STEC vs control.  
+So now we are comparing two groups: one control group of 3 replicates (C2 vs. C1) and one experimental group comprising two sets of 3 replicates.
+
+
+The model suggests that the ratio of reads captured by baitcap vs. shotgun method is 88% higher for target STEC vs. the commensal control. It also suggests that this value is statistically significant (p = 0.006).  However, a quick evaluation of the diagnostic plots for the model show that our normality assumptions are not valid.  There are some outliers in our residuals (top left plot) and the QQ plot deviates dramatically from a straight line (top right plot).  We have so little data (n = 9) that it's hard to say what we see is largely due to sample size.  That said, I would **not** use the results of this linear model in a paper or presentation.  I would just show the graphs and say we can see "trends" of an effect but cite the limited sample size in this small pilot study.
+
+```{r type_data, echo=FALSE}
+# We subset our data to get only the STECs, so we can combine them
+stec <- data[ which(data$type == 'FC1' | data$type == 'KC1'), ]
+stec2 <- stec %>% mutate(comparison = ifelse(comparison == 'K', 'F', comparison)) %>% group_by(comparison, bc, rep) %>% summarize(outcome = sum(outcome)) %>% mutate(type = 'FKC1')
+
+# Perform all the data transformations on this new combined data
+stec3 <- stec2 %>% arrange(type, rep, bc) %>% group_by(type, rep, bc) %>% mutate(y = outcome / lag(outcome)) %>% filter(!is.na(y))
+# Log transform Y
+stec3$logY <- log(stec3$y)
+# Get our outcome variable (Z = logY(baitcap) - logY(shotgun))
+stec4 <- stec3 %>% group_by(rep, type) %>% mutate(z = logY - lag(logY)) %>% filter(!is.na(z))
+stec5 <- stec4[ , c("type","comparison", "rep", "z")]
+
+d5 <- rbind(stec3, d2[which(d2$type == 'C2C1'),])
+stec5$rep <- as.factor(stec5$rep)
+d6 <- rbind(stec5, d4[which(d4$type == 'C2C1'),])
+
+```
+```{r type_data2, echo=FALSE}
+d_sub <- d4[ which(d4$comparison != 'N'), ]
+d_sub$type[d_sub$type == "KC1" | d_sub$type == "FC1"] <- "FKC1"
+
+```
+
+
+```{r type_analysis2, echo=FALSE}
+l4 <- lm(z ~ as.factor(type), d_sub)
+summary(l4)
+plot(l4$residuals, main = "Residuals", ylab = "residuals", xlab = "observation number")
+plot(cooks.distance(l4), main = "Cook's D", ylab = "Cook's D", xlab = "observation number")
+exp(coef(l4))
+
+```
+```{r lm_eval, echo=FALSE}
+par(mfrow=c(2,2))
+plot(l4)
+par(mfrow=c(1,1))
+
+```
+
+
+
+
+```{r type_analysis_old, include=FALSE}
+l4 <- lm(z ~ as.factor(type), d6)
+summary(l4)
+plot(l4$residuals, main = "Residuals", ylab = "residuals", xlab = "observation number")
+plot(cooks.distance(l4), main = "Cook's D", ylab = "Cook's D", xlab = "observation number")
+exp(coef(l3))
+```
+
+The boxplot figure below 
+
+
+```{r type_graph, echo=FALSE}
+
+d6$type[d6$type == "FKC1"] <- "Target STEC vs. Commensal"
+d6$type[d6$type == "C2C1"] <- "Commensal control"
+
+ggboxplot(d6, x = "type", y = "z", 
+          color = "type", palette = "npg",
+          ylab = "Log(total # reds) for STEC vs. commensal", 
+          xlab = "Comparison Type")
+```
