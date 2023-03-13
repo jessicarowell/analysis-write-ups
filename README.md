@@ -12,7 +12,9 @@ Started by [@jessicarowell](https://github.com/jessicarowell)
 ## Baitcap Analysis
 
 This is an analysis done to account for a change in wet lab methodology that happened in this project.
-A detailed description is included in the html file. 
+A detailed description is included in the html file.
+
+File(s): baitcap_analysis_2021.html 
 
 ## Translate Transcript 2 Genomic Coordinates
 
@@ -22,4 +24,6 @@ Usage: `python3 translate-t2g.py -h`
 
 ## Machine Learning Example
 
-Example available upon request.
+This R Markdown report explores the *ERBB2*/HER2 oncogene in relation to HER2 status among patients with breast cancer. The goal was to analyze HER2 in TCGA breast cancer data and assess how RNA expression, copy number, and clinical status are correlated and whether RNA or DNA is predictive of HER2 clinical status.
+
+File(s): HER2_breast_cancer_2022.html
